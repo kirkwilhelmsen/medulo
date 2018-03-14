@@ -3,10 +3,14 @@ package org.renci.medulo;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
+import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
 import java.util.stream.Collectors;
@@ -15,6 +19,7 @@ import org.apache.commons.math3.linear.MatrixUtils;
 import org.apache.commons.math3.linear.RealMatrix;
 import org.apache.commons.math3.linear.RealVector;
 import org.apache.commons.math3.stat.StatUtils;
+import org.renci.medulo.Abstract_FileSetting.Evolution.EvolutionModel;
 import org.renci.medulo.tools.CHATBufferedFileReader;
 import org.renci.medulo.tools.CHATBufferedFileWriter;
 import org.slf4j.Logger;
@@ -473,65 +478,272 @@ public abstract class Abstract_FileSetting {
 			this.data = data;
 		}
 	}
+
+	public class Evolution{
+		public double scoreThreshold;
+		public double probMutation;
+		public double fractChange;
+		public int genTarget;
+		public int genomes2Save;
+		Map<String,Set<String>> ggIn ;
+		Map<String,String> g2gr = new LinkedHashMap<String,String>();
+		public BigFrame exp;
+		public EvolutionModel startModel = new EvolutionModel();
+		public List<EvolutionModel> newModels = new ArrayList<EvolutionModel>();
+		public List<EvolutionModel> models = new ArrayList<EvolutionModel>();
+		Random r = new Random(System.currentTimeMillis());
+ 		public String [] grOrder;
+ 		public String [] gOrder;
+ 		public CompairEvolutionModel cmp;
+ 		public StringBuffer line = new StringBuffer();
+ 		public Evolution(double probMutation, Map<String, Set<String>> gg, BigFrame exp, double scoreThreshold, int genomes2Save, CompairEvolutionModel cmp) {
+			super();
+			this.probMutation = probMutation;
+			this.ggIn = gg;
+			this.exp = exp;
+			this.scoreThreshold=scoreThreshold;
+			this.genomes2Save=genomes2Save;
+			this.cmp= cmp;
+			List<String> gOrderList = new ArrayList<String>();
+			for(String gr:gg.keySet()) {
+				gOrderList.addAll(gg.get(gr));
+				for(String g: gg.get(gr)) {
+					g2gr.put(g, gr);
+				}
+			}
+			gOrder= gOrderList.toArray(new String[gOrderList.size()]);
+		}
+		public void makeInitalModel(int i) {
+			startModel.betas=new double[gOrder.length][grOrder.length]; 
+			for(int gr = 0;gr<grOrder.length;gr++) {
+				for(int g= 0;g<gOrder.length;g++) {
+					startModel.betas[g][gr] =g2gr.get(gOrder[g]).equalsIgnoreCase(grOrder[gr])?1d:-1d;
+				}
+			}
+			normalizeBetas(startModel);
+			calcModel(startModel);
+		}
+		private void normalizeBetas(EvolutionModel curModel) {
+			double sumBetas;
+			for(int gr = 0;gr<grOrder.length;gr++) {
+				sumBetas=0;
+				for(int g= 0;g<gOrder.length;g++) {
+					sumBetas += Math.abs(startModel.betas[g][gr]);
+				}
+				sumBetas = sumBetas/((double)gOrder.length);
+				for(int g= 0;g<gOrder.length;g++) {
+					startModel.betas[g][gr] = startModel.betas[g][gr]/sumBetas;
+				}
+			}
+		}
+		private void calcModel(EvolutionModel curModel) {
+			curModel.scores = new double[exp.xAxisColNames.length][grOrder.length]; 
+			for(int gr = 0;gr<grOrder.length;gr++) {
+				for(int c =0;c<exp.xAxisColNames.length;c++ ) {
+					double curScore = 0;
+					for(int g =0; g<gOrder.length;g++) {
+						curScore += curModel.betas[gr][g] * exp.data[exp.getyAxisRowNames2Index().get(gOrder[g])][c];
+					}
+					curModel.scores[c][gr]=curScore;
+				}
+			}
+			//normalize by group
+			double cMax;
+			Double [] metrix = {0d,0d};
+			for(int m=0;m<grOrder.length;m++) {
+				cMax = Double.NEGATIVE_INFINITY;
+				for( int c = 0;c<curModel.scores.length;c++) {
+					cMax=Double.max(cMax, curModel.scores[c][m]);
+				}
+				for( int c = 0;c<curModel.scores.length;c++) {
+					curModel.scores[c][m]= curModel.scores[c][m]/cMax;
+				}
+			}
+			int intGr = -9;
+			double cellTotal;
+			for( int c = 0;c<curModel.scores.length;c++) {
+				cMax=Double.NEGATIVE_INFINITY;
+				cellTotal=0;
+				for(int gr = 0;gr<grOrder.length;gr++) {
+					cellTotal+= curModel.scores[c][gr];
+					if(curModel.scores[c][gr]>cMax) {
+						intGr = gr;
+						cMax = curModel.scores[c][gr];
+					}
+					if(cMax>scoreThreshold) {
+						curModel.identity[c]=gOrder[intGr];
+						cellTotal-= cMax;
+						metrix[0] +=cMax;
+						metrix[1] -= cellTotal;
+					}else {
+						curModel.identity[c]="null";
+						metrix[0] += 1-cMax;
+						metrix[1] -=cellTotal;
+					}
+				}
+			}
+			curModel.metrix= metrix;
+		}
+		public void makeModels(int x) {
+			for(EvolutionModel cur :models ) {
+				EvolutionModel newM = new EvolutionModel();
+				newM.betas = cur.betas.clone();
+				for(int rep=0;rep<x;rep++) {
+					for(int gr=0;gr<grOrder.length;gr++) {
+						for(int c=0;c<exp.getyAxisRowNames().length;c++) {
+							if(r.nextFloat()<probMutation) {
+								if(r.nextBoolean()) {
+									newM.betas[c][gr] = newM.betas[c][gr]*(1+fractChange);
+								}else {
+									newM.betas[c][gr] = newM.betas[c][gr]*(1-fractChange);
+								}
+								
+							}
+						}
+					}
+				}
+				normalizeBetas(newM);
+				newModels.add(newM);
+			}
+		}
+		public void setGenTarget(int genTarget) {
+			this.genTarget = genTarget;
+		}
+		public void setFractioChange(double d) {
+			this.fractChange=d;
+		}
+		public class EvolutionModel{
+			double[][] betas;
+			double scores[][];
+			String [] identity;
+			Double [] metrix;
+		}
+		public void calcNewModels() {
+			for(EvolutionModel cur:newModels) {
+				calcModel(cur);
+				models.add(cur);
+			}
+			newModels.clear();
+		}
+		public void evolve(int gens,int progeny) {
+			for(int reps = 0;reps<gens;reps++) {
+				makeModels(progeny);
+				calcNewModels();
+				selectNextGen();
+			}
+		}
+		private void selectNextGen() {
+			newModels.clear();
+			Collections.sort(models,this.cmp);
+			for(int i=0; i<genomes2Save;i++) {
+				newModels.add(models.get(i));
+			}
+			models.clear();
+			models.addAll(newModels);
+			newModels.clear();
+		}
+		public void write(File file) {
+			CHATBufferedFileWriter out = new CHATBufferedFileWriter();
+			out.open(file.getAbsolutePath());
+			Collections.sort(models,cmp);
+			for(int m=0;m<models.size();m++) {
+				EvolutionModel cur = models.get(m);
+				writeModel(m, out,cur);
+			}
+			out.close();
+		}
+		private void writeModel(int m, CHATBufferedFileWriter out, EvolutionModel cur) {
+			line.delete(0, line.capacity());
+			line.append("Start\t").append(m);
+			out.writeString(line.toString(),true);
+			line.delete(0, line.capacity());
+			line.append(cur.metrix[0]).append("\t").append(cur.metrix[0]);
+			out.writeString(line.toString(),true);
+			for(int c=0;c<exp.getxAxisColNames().length;c++) {
+				line.delete(0, line.capacity());
+				line.append(exp.getxAxisColNames()[c]).append("\t");
+				for(int gr=0;gr<grOrder.length;gr++) {
+					line.append(cur.betas[c][gr]).append("\t");
+				}
+				line.append(cur.identity[c]);
+				out.writeString(line.toString(), true);
+			}
+			out.writeString("Betas");
+			
+			for(int g=0;g<gOrder.length;g++) {
+				line.delete(0, line.capacity());
+				line.append(gOrder[g]).append("\t");
+				for(int gr=0;gr<grOrder.length;gr++) {
+					line.append(cur.betas[g][gr]).append("\t");
+				}
+				out.writeString(line.toString(),true);
+			}
+			line.delete(0, line.capacity());
+			line.append("End\t").append(m);
+			out.writeString(line.toString(),true);
+
+		}
+	}
 	
+	public class CompairEvolutionModel implements Comparator<EvolutionModel>{
+		Double wt0;
+		Double wt1;
+		Double temp1, temp2;
+		public CompairEvolutionModel(double wt0, double wt1) {
+			super();
+			this.wt0 = wt0;
+			this.wt1 = wt1;
+		}
+
+		public int compare(EvolutionModel c1, EvolutionModel c2) {
+			temp1 =(c1.metrix[0]*wt0 + c1.metrix[1]*wt1);
+			temp2 =(c2.metrix[0]*wt0 + c2.metrix[1]*wt1);
+			return temp1.compareTo(temp2);
+		}
+	}
 	public String getPcaLoadings() {
 		return pcaLoadings;
 	}
-
 	public void setPcaLoadings(String pcaLoadings) {
 		this.pcaLoadings = pcaLoadings;
 	}
-
 	public String getControlLouvainIds() {
 		return controlLouvainIds;
 	}
-
 	public void setControlLouvainIds(String controlLouvainIds) {
 		this.controlLouvainIds = controlLouvainIds;
 	}
-
 	public String getControlPCScores() {
 		return controlPCScores;
 	}
-
 	public void setControlPCScores(String controlPCScores) {
 		this.controlPCScores = controlPCScores;
 	}
-
 	public String getTestPCScores() {
 		return testPCScores;
 	}
-
 	public void setTestPCScores(String testPCScores) {
 		this.testPCScores = testPCScores;
 	}
-
 	public String getControlScaledExression() {
 		return controlScaledExression;
 	}
-
 	public void setControlScaledExression(String controlScaledExression) {
 		this.controlScaledExression = controlScaledExression;
 	}
-
 	public String getControlTSNEScores() {
 		return controlTSNEScores;
 	}
-
 	public void setControlTSNEScores(String controlTSNEScores) {
 		this.controlTSNEScores = controlTSNEScores;
 	}
-
 	public String getTestScaledExpression() {
 		return testScaledExpression;
 	}
-
 	public void setTestScaledExpression(String testScaledExpression) {
 		this.testScaledExpression = testScaledExpression;
 	}
-
 	public static Logger getLogger() {
 		return logger;
 	}
-
 }

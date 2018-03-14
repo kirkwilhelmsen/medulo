@@ -15,14 +15,16 @@ public class CalculateKNNClusteAndTsne extends Abstract_FileSetting implements R
 		testPC.load(false);
 		BigFrame controlPC = new BigFrame("controlPC",getControlPCScores(), "PC", "control_cell", "\t");
 		controlPC.load(false);
-		kNearestNeighbor knn = new kNearestNeighbor(controlPC, 14, 10, tsne, cluster, false,false);
+		kNearestNeighbor knn = new kNearestNeighbor(controlPC, 14, 3, tsne, cluster, true,true);
 		CHATBufferedFileWriter out = new CHATBufferedFileWriter();
-		out.open("vismodegenibCells.tSNE.cluster.notStd_notamb.txt");
+		out.open("controlCells.tSNE.cluster.Std_notamb_3knn.txt");
+		logger.info("Opening knn output file");
 		out.writeString("tsne1\ttsne2\tx");
 		for(int c=0;c<testPC.getData().length;c++) {
-			out.writeString(knn.calculate_KNN(testPC.getData()[c],testPC.getyAxisRowNames()[c]));
+			out.writeString(knn.calculate_KNN(controlPC.getData()[c],controlPC.getyAxisRowNames()[c]));
 		}
 		out.close();
+		logger.info("Closing knn output file");
 		
 	}
 
