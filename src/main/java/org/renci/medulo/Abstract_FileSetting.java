@@ -4,7 +4,6 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -20,7 +19,6 @@ import org.apache.commons.math3.linear.MatrixUtils;
 import org.apache.commons.math3.linear.RealMatrix;
 import org.apache.commons.math3.linear.RealVector;
 import org.apache.commons.math3.stat.StatUtils;
-import org.renci.medulo.Abstract_FileSetting.Evolution.EvolutionModel;
 import org.renci.medulo.tools.CHATBufferedFileReader;
 import org.renci.medulo.tools.CHATBufferedFileWriter;
 import org.slf4j.Logger;
@@ -377,29 +375,44 @@ public abstract class Abstract_FileSetting {
 				System.out.println("Length header for columns \t" + xAxisColNames.length + " first two col header names \t" + removeQuotes(xAxisColNames[0] ));
 			}
 			String [] line = in.nextLine().split(delimiter);
-			List<String> geneList = new ArrayList<String>();
-			if(allGenes.contains(removeQuotes(line[0])))geneList.add(removeQuotes(line[0]));
+			Set<String> geneSet = new LinkedHashSet<String>();
+			if(allGenes.contains(removeQuotes(line[0])))geneSet.add(removeQuotes(line[0]));
 			System.out.println("Beginning first line data \t"+(line.length-1) + "\t" + removeQuotes(line[0]) + "\t" + line[1]);
 			String nextline = null;
-			while((nextline = in.nextLine())!=null)	if(allGenes.contains(removeQuotes(nextline.split(delimiter)[0])))geneList.add(removeQuotes(nextline.split(delimiter)[0]));
+			boolean infoLinewritten =false;
+			while((nextline = in.nextLine())!=null)	{
+				String [] l = nextline.split(delimiter);
+				if(allGenes.contains(removeQuotes(l[0])))geneSet.add(removeQuotes(l[0]));
+				if(!infoLinewritten && geneSet.size()>0 && geneSet.size()%20==0) {
+					logger.debug(geneSet.size() +" expected genes found");
+					infoLinewritten = true;
+				}
+				if(infoLinewritten && geneSet.size()>0 && (geneSet.size()-1)%20==0) {
+					infoLinewritten = false;
+				}
+			}
 			in.close();
+			List<String> geneList = new ArrayList<String>();
+			geneList.addAll(geneSet);
 			Collections.sort(geneList);
-			Map<String,Integer> gene2Index = new LinkedHashMap<String,Integer>();
-			for(int i = 0; i<geneList.size();i++)gene2Index.put(geneList.get(i),i);
-			data = new Double [geneList.size()][xAxisColNames.length];
-			logger.info("Matrix size: " +xAxisColNames.length + " X " + (allGenes.size()));
+			yAxisRowNames = geneList.toArray(new String [geneList.size()]);
+			for(int i = 0; i<yAxisRowNames.length;i++)yAxisRowNames2Index.put(geneList.get(i),i);
+			data = new Double [yAxisRowNames.length][xAxisColNames.length];
+			
+			logger.info("Matrix size:  " + geneSet.size()+ " X " +xAxisColNames.length);
 			in = new CHATBufferedFileReader(inFile);
 			nextline = in.nextLine();
-			int lineCt=-1;
+			int lineCt=0;
 			int linesInterrogated=0;
 			while((nextline=in.nextLine())!=null){
 				linesInterrogated++;
 				String [] s = nextline.split(delimiter);
-				if(gene2Index.containsKey(removeQuotes(s[0]))){
+				if(yAxisRowNames2Index.containsKey(removeQuotes(s[0]))){
+					lineCt++;
 					for(int i =1; i<s.length;i++) {
 	//					inputValue = "At i: " + (i-1) + " row: " + lineCt + " value: " + s[i]; 
 						try {
-							data[gene2Index.get(removeQuotes(s[0]))][i - 1] = Double.valueOf(removeQuotes(s[i]));
+							data[yAxisRowNames2Index.get(removeQuotes(s[0]))][i - 1] = Double.valueOf(removeQuotes(s[i]));
 						} catch (Exception e) {
 		/*					System.out.println(matrixSize);
 							System.out.println(currentLineNumber);
@@ -414,8 +427,6 @@ public abstract class Abstract_FileSetting {
 				}
 				if(linesInterrogated%1000==0)logger.info("Lines read:\t" + linesInterrogated +"\tLines used:\t" + lineCt);
 			}
-			yAxisRowNames = new String[yAxisRowNames2Index.size()];
-			for(String r :yAxisRowNames2Index.keySet())yAxisRowNames[yAxisRowNames2Index.get(r)]=r;
 			in.close();
 			logger.info(lineCt +" gene expression data found of the " + allGenes.size() + " expected");
 			logger.info("Loaded file: " + fileName + " into " + frameName	);
@@ -545,7 +556,14 @@ public abstract class Abstract_FileSetting {
 		public double scoreThreshold;
 		public double probMutation;
 		public double fractChange;
-		public int genTarget;
+		public boolean pareto =true;
+		public boolean sortAngel = false;
+		public double paretoAngle =5;
+		public double angle;
+		public double wt0;
+		public double wt1;
+		public int minProgeney;
+		//public int genTarget;
 		public int genomes2Save;
 		Map<String,Set<String>> ggIn ;
 		Map<String,Set<String>> g2gr = new LinkedHashMap<String,Set<String>>();
@@ -558,28 +576,22 @@ public abstract class Abstract_FileSetting {
  		public String [] grOrder;
  		public String [] gOrder;
  		public String [] cOrder;
- 		public CompairEvolutionModel cmp;
+// 		public CompairEvolutionModel cmp;
+// 		public CompairEvolutionModelAngle cmpa;
  		public StringBuffer line = new StringBuffer();
- 		public boolean verbose1=true;
- 		public Evolution(double probMutation, Map<String, Set<String>> gg, BigFrame exp, double scoreThreshold, int genomes2Save, CompairEvolutionModel cmp) {
+ 		public boolean verbose1=false;
+ 		public Evolution(Map<String, Set<String>> gg, BigFrame exp/*, CompairEvolutionModel cmp, CompairEvolutionModelAngle cmpa*/) {
 			super();
-			this.probMutation = probMutation;
 			this.ggIn = gg;
 			this.exp = exp;
-			this.scoreThreshold=scoreThreshold;
-			this.genomes2Save=genomes2Save;
-			this.cmp= cmp;
-			List<String> gOrderList = new ArrayList<String>();
+//			this.cmp= cmp;
 			for(String gr:gg.keySet()) {
-				gOrderList.addAll(gg.get(gr));
 				for(String g: gg.get(gr)) {
 					if(!g2gr.containsKey(g))g2gr.put(g, new LinkedHashSet<String>());
 					g2gr.get(g).add(gr);
 				}
 			}
-			ggIn=null;
-			gOrderList.retainAll(exp.yAxisRowNames2Index.keySet());
-			gOrder= gOrderList.toArray(new String[gOrderList.size()]);
+			gOrder = exp.yAxisRowNames2Index.keySet().toArray(new String[exp.yAxisRowNames2Index.size()]);
 			grOrder = gg.keySet().toArray(new String[gg.keySet().size()]);
 			cOrder =exp.getxAxisColNames2Index().keySet().toArray(new String[exp.getxAxisColNames2Index().keySet().size()]);
 			expGeneByCell = new double [gOrder.length][cOrder.length];
@@ -657,7 +669,7 @@ public abstract class Abstract_FileSetting {
 					}
 				}
 				if(cMax>scoreThreshold) {
-					curModel.identity[c]=gOrder[intGr];
+					curModel.identity[c]=grOrder[intGr];
 					cellTotal-= cMax;
 					metrix[0] +=cMax;
 					metrix[1] -= cellTotal;
@@ -668,10 +680,14 @@ public abstract class Abstract_FileSetting {
 				}
 			}
 			curModel.metrix= metrix;
+			curModel.euclidAndAngle = new Double[2];
+			curModel.euclidAndAngle[0]=Math.sqrt(Math.pow(metrix[0],2)+Math.pow(metrix[1], 2));
+			curModel.euclidAndAngle[1]=Math.atan(metrix[0]/metrix[1])/Math.PI*180d;
 		}
 		public void makeModels(int x) {
 			logger.info("Making new " + x + " for each existing saved model");
 			int ct =0;
+			if(x<minProgeney)x = minProgeney;
 			for(EvolutionModel cur :models ) {
 				for(int rep=0;rep<x;rep++) {
 					ct++;
@@ -680,12 +696,7 @@ public abstract class Abstract_FileSetting {
 					for(int gr=0;gr<grOrder.length;gr++) {
 						for(int c=0;c<exp.getyAxisRowNames().length;c++) {
 							if(r.nextFloat()<probMutation) {
-								if(r.nextBoolean()) {
-									newM.betas[c][gr] = newM.betas[c][gr]*(1+fractChange);
-								}else {
-									newM.betas[c][gr] = newM.betas[c][gr]*(1-fractChange);
-								}
-								
+									newM.betas[c][gr] += r.nextGaussian()*fractChange;
 							}
 						}
 					}
@@ -698,17 +709,27 @@ public abstract class Abstract_FileSetting {
 			}
 			logger.info("Finish making new models");
 		}
-		public void setGenTarget(int genTarget) {
-			this.genTarget = genTarget;
-		}
-		public void setFractioChange(double d) {
-			this.fractChange=d;
-		}
-		public class EvolutionModel{
+		public class EvolutionModel implements Comparable<EvolutionModel>{
 			double[][] betas;
 			double scores[][];
 			String [] identity;
 			Double [] metrix;
+			Double [] euclidAndAngle;
+			@Override
+			public int compareTo(EvolutionModel o) {
+				if(!sortAngel) {
+					Double temp1 =(this.metrix[0]*wt0 + this.metrix[1]*wt1);
+					Double temp2 =(o.metrix[0]*wt0 + o.metrix[1]*wt1);
+					return -temp1.compareTo(temp2);
+				}else {
+					int x = this.euclidAndAngle[1].compareTo(o.euclidAndAngle[1]);
+					if(x==0) {	
+						return this.euclidAndAngle[0].compareTo(o.euclidAndAngle[0]);
+					}else {
+						return x;
+					}
+				}
+			}
 		}
 		public void calcNewModels() {
 			for(EvolutionModel cur:newModels) {
@@ -719,26 +740,91 @@ public abstract class Abstract_FileSetting {
 		}
 		public void evolve(int gens,int progeny) {
 			for(int reps = 0;reps<gens;reps++) {
-				makeModels(progeny);
+				logger.info("Starting generation: " + reps);
+				int p2 = (int)((double) progeny * (double)genomes2Save/(double) models.size());
+				if(p2<10)p2=10;
+				makeModels(p2);
 				selectNextGen();
 			}
 		}
 		public void selectNextGen() {
-			models.addAll(newModels);
-			newModels.clear();
-			Collections.sort(models,this.cmp);
-			for(int i=0; i<genomes2Save;i++) {
-				newModels.add(models.get(i));
+			if (!pareto) {
+				models.addAll(newModels);
+				newModels.clear();
+				sortAngel=false;
+				Collections.sort(models);
+				for (int i = 0; i < genomes2Save; i++) {
+					newModels.add(models.get(i));
+				}
+				models.clear();
+				for (EvolutionModel ev : newModels) {
+					/*				System.out.println(ev.metrix[0]);
+									System.out.println(ev.metrix[1]);
+									System.out.println(startModel.metrix[0]);
+									System.out.println(startModel.metrix[1]);
+									System.out.println(cmp.compare(ev, startModel));*/
+					if (ev.compareTo(startModel) <= 0 || r.nextFloat() < 0.1)
+						models.add(ev);
+				}
+				Collections.sort(models);
+				newModels.clear();
+				logger.info(models.size() + " models saved");
+				logger.info("metrix scores for initial model\t" + startModel.metrix[0].toString() + "\t"
+						+ startModel.metrix[1].toString());
+				logger.info("metrix scores for best model:\t" + models.get(0).metrix[0].toString() + "\t"
+						+ models.get(0).metrix[1].toString());
+			}else {
+				sortAngel=true;
+				models.addAll(newModels);
+				newModels.clear();
+				Collections.sort(models);
+				int ct = (int)((double)genomes2Save/((double)90/(double)paretoAngle));
+				if(ct<10)ct=10;
+				for(double a=0;a<90;a+=paretoAngle) {
+					List<Double> euclidDist = new ArrayList<Double>();
+					for(int i=0; i< models.size() ; i++) {
+						if( models.get(i).euclidAndAngle[1].doubleValue()>=a && models.get(i).euclidAndAngle[1].doubleValue()<=a + paretoAngle) {
+							euclidDist.add(models.get(i).euclidAndAngle[0]);
+						}
+					}
+					if(euclidDist.size()>0) {
+						Collections.sort(euclidDist);
+						double eu;
+						if(euclidDist.size()<=ct) {
+							eu = Double.MIN_VALUE;
+						}else {
+							eu = euclidDist.get(euclidDist.size()-ct);
+						}
+						logger.info("For angle " + a + " to " + (a +paretoAngle) + " has " + euclidDist.size() + " of these up to " + ct + " will be saved");
+						for(int i=0; i< models.size() ; i++) {
+							if( models.get(i).euclidAndAngle[0]>= eu &&models.get(i).euclidAndAngle[1].doubleValue()>a && models.get(i).euclidAndAngle[1].doubleValue()<=(a + paretoAngle)) {
+								newModels.add(models.get(i));
+							}
+						}
+					}
+				}
+				sortAngel=false;
+				models.clear();
+				models.addAll(newModels);
+				newModels.clear();
+				Collections.sort(models);
+				newModels.clear();
+				logger.info(models.size() + " models saved");
+				logger.info("metrix scores for initial model based on metrix\t" + startModel.metrix[0].toString() + "\t"
+						+ startModel.metrix[1].toString());
+				logger.info("metrix scores for best model:\t" + models.get(0).metrix[0].toString() + "\t"
+						+ models.get(0).metrix[1].toString());
 			}
-			models.clear();
-			models.addAll(newModels);
-			Collections.sort(models,this.cmp);
-			newModels.clear();
 		}
 		public void write(File file) {
 			CHATBufferedFileWriter out = new CHATBufferedFileWriter();
 			out.open(file.getAbsolutePath());
-			Collections.sort(models,cmp);
+			if(pareto) {
+				sortAngel=true;
+			}else {
+				sortAngel=false;
+			}
+			Collections.sort(models);
 			for(int m=0;m<models.size();m++) {
 				EvolutionModel cur = models.get(m);
 				writeModel(m, out,cur);
@@ -750,17 +836,21 @@ public abstract class Abstract_FileSetting {
 			line.append("Start\t").append(m);
 			out.writeString(line.toString(),true);
 			line.delete(0, line.capacity());
-			line.append(cur.metrix[0]).append("\t").append(cur.metrix[0]);
+			line.append(cur.metrix[0]).append("\t").append(cur.metrix[1]);
 			out.writeString(line.toString(),true);
-			for(int c=0;c<exp.getxAxisColNames().length;c++) {
+			line.delete(0, line.capacity());
+			line.append(cur.euclidAndAngle[0]).append("\t").append(cur.euclidAndAngle[1]);
+			out.writeString(line.toString(),true);
+			for(int c=0;c<cOrder.length;c++) {
 				line.delete(0, line.capacity());
-				line.append(exp.getxAxisColNames()[c]).append("\t");
+				line.append(cOrder[c]).append("\t");
 				for(int gr=0;gr<grOrder.length;gr++) {
-					line.append(cur.betas[c][gr]).append("\t");
+					line.append(cur.scores[c][gr]).append("\t");
 				}
 				line.append(cur.identity[c]);
-				out.writeString(line.toString(), true);
+				
 			}
+			
 			out.writeString("Betas");
 			
 			for(int g=0;g<gOrder.length;g++) {
@@ -776,23 +866,33 @@ public abstract class Abstract_FileSetting {
 			out.writeString(line.toString(),true);
 
 		}
-	}
-	
-	public class CompairEvolutionModel implements Comparator<EvolutionModel>{
-		Double wt0;
-		Double wt1;
-		Double temp1, temp2;
-		public CompairEvolutionModel(double wt0, double wt1) {
-			super();
+		public void setScoreThreshold(double scoreThreshold) {
+			this.scoreThreshold = scoreThreshold;
+		}
+		public void setFractioChange(double d) {
+			this.fractChange=d;
+		}
+		public void setGenomes2Save(int genomes2Save) {
+			this.genomes2Save = genomes2Save;
+		}
+		public void setProbMutation(double probMutation) {
+			this.probMutation = probMutation;
+		}
+		public void setPareto(boolean pareto) {
+			this.pareto = pareto;
+		}
+		public void setAngle(double angle) {
+			this.angle = angle;
+		}
+		public void setWt0(double wt0) {
 			this.wt0 = wt0;
+		}
+		public void setWt1(double wt1) {
 			this.wt1 = wt1;
 		}
-
-		public int compare(EvolutionModel c1, EvolutionModel c2) {
-			temp1 =(c1.metrix[0]*wt0 + c1.metrix[1]*wt1);
-			temp2 =(c2.metrix[0]*wt0 + c2.metrix[1]*wt1);
-			return -temp1.compareTo(temp2);
-		}
+		public void setMinProgeney(int minProgeney) {
+			this.minProgeney = minProgeney;
+		}	
 	}
 	public String getPcaLoadings() {
 		return pcaLoadings;

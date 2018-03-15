@@ -32,13 +32,22 @@ public class Evole extends Abstract_FileSetting implements Runnable {
 		}*/
 		BigFrame controlExp = new BigFrame("controlExp",getControlScaledExression(), "control_cell", "gene", "\t");
 		controlExp.load(false,allGenes);
-		Evolution ev = new Evolution(.1d, gg, controlExp,.3d,100,new CompairEvolutionModel(10, 1));
-		ev.setFractioChange(.2d);
+		Evolution ev = new Evolution(gg, controlExp/*,new CompairEvolutionModel(10, 1), new CompairEvolutionModelAngle()*/);
+		ev.setGenomes2Save(100);
+		ev.setFractioChange(.5d);
+		ev.setProbMutation(1);
+		ev.setScoreThreshold(.3);
+		ev.setMinProgeney(100);
+		ev.setWt0(1);
+		ev.setWt1(.1);
+		ev.setPareto(true);
+		ev.setAngle(5);
 		ev.makeInitalModel();
-		ev.makeModels(100);
+		ev.makeModels(1000);
 		ev.selectNextGen();
-		ev.evolve(100,10);
+		ev.evolve(10,10);
 		ev.write(new File("curResults,txt"));
+		
 	}
 
 	public static void main(String[] args) {
