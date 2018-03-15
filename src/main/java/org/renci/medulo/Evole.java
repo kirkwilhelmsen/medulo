@@ -24,18 +24,19 @@ public class Evole extends Abstract_FileSetting implements Runnable {
 			allGenes.add(f[0]);
 		}
 		in.close();
-		int ct=0;
+		/*int ct=0;
 		for(String gr:gg.keySet())ct += gg.get(gr).size();
 		if(allGenes.size()!=ct) {
 			logger.error("Genes are on more than one list");
 			System.exit(-1);
-		}
+		}*/
 		BigFrame controlExp = new BigFrame("controlExp",getControlScaledExression(), "control_cell", "gene", "\t");
-		controlExp.load(false);
+		controlExp.load(false,allGenes);
 		Evolution ev = new Evolution(.1d, gg, controlExp,.3d,100,new CompairEvolutionModel(10, 1));
 		ev.setFractioChange(.2d);
-		ev.makeModels(10);
-		ev.calcNewModels();
+		ev.makeInitalModel();
+		ev.makeModels(100);
+		ev.selectNextGen();
 		ev.evolve(100,10);
 		ev.write(new File("curResults,txt"));
 	}
