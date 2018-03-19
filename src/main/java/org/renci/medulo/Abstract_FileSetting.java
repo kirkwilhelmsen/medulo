@@ -552,7 +552,7 @@ public abstract class Abstract_FileSetting {
 		}
 	}
 
-	public class Evolution{
+	public class Evolution   implements Runnable{
 		public double scoreThreshold;
 		public double probMutation;
 		public double fractChange;
@@ -562,9 +562,12 @@ public abstract class Abstract_FileSetting {
 		public double angle;
 		public double wt0;
 		public double wt1;
+		public String groupStart;
+		public String scaledExpresion;
 		public int minProgeney;
-		//public int genTarget;
+		public String outFile;
 		public int genomes2Save;
+		public int reps;
 		Map<String,Set<String>> ggIn ;
 		Map<String,Set<String>> g2gr = new LinkedHashMap<String,Set<String>>();
 		double[][] expGeneByCell;
@@ -580,19 +583,32 @@ public abstract class Abstract_FileSetting {
 // 		public CompairEvolutionModelAngle cmpa;
  		public StringBuffer line = new StringBuffer();
  		public boolean verbose1=false;
- 		public Evolution(Map<String, Set<String>> gg, BigFrame exp/*, CompairEvolutionModel cmp, CompairEvolutionModelAngle cmpa*/) {
+ 		public Evolution() {
 			super();
-			this.ggIn = gg;
-			this.exp = exp;
-//			this.cmp= cmp;
-			for(String gr:gg.keySet()) {
-				for(String g: gg.get(gr)) {
+		}
+		public void run(){
+			CHATBufferedFileReader in = new CHATBufferedFileReader(new File(groupStart));
+			String l;
+			Set<String> allGenes = new LinkedHashSet<String>();
+			ggIn= new LinkedHashMap<String, Set<String>>();
+			while((l=in.nextLine())!=null) {
+				String [] f = l.split("\t");
+				if(!ggIn.containsKey(f[1]))ggIn.put(f[1], new LinkedHashSet<String>());
+				ggIn.get(f[1]).add(f[0]);
+				allGenes.add(f[0]);
+			}
+			in.close();
+			exp = new BigFrame("controlExp",scaledExpresion, "control_cell", "gene", "\t");
+			exp.load(false,allGenes);
+
+			for(String gr:ggIn.keySet()) {
+				for(String g: ggIn.get(gr)) {
 					if(!g2gr.containsKey(g))g2gr.put(g, new LinkedHashSet<String>());
 					g2gr.get(g).add(gr);
 				}
 			}
 			gOrder = exp.yAxisRowNames2Index.keySet().toArray(new String[exp.yAxisRowNames2Index.size()]);
-			grOrder = gg.keySet().toArray(new String[gg.keySet().size()]);
+			grOrder = ggIn.keySet().toArray(new String[ggIn.keySet().size()]);
 			cOrder =exp.getxAxisColNames2Index().keySet().toArray(new String[exp.getxAxisColNames2Index().keySet().size()]);
 			expGeneByCell = new double [gOrder.length][cOrder.length];
 			for(int g = 0;g<gOrder.length;g++) {
@@ -602,6 +618,12 @@ public abstract class Abstract_FileSetting {
 			}
 			exp=null;
 			System.gc();
+			makeInitalModel();
+			makeModels(1000);
+			selectNextGen();
+			evolve(reps,minProgeney);
+			write(new File(outFile));
+
 		}
 		public void makeInitalModel() {
 			startModel.betas=new double[gOrder.length][grOrder.length]; 
@@ -694,9 +716,9 @@ public abstract class Abstract_FileSetting {
 					EvolutionModel newM = new EvolutionModel();
 					newM.betas = cur.betas.clone();
 					for(int gr=0;gr<grOrder.length;gr++) {
-						for(int c=0;c<exp.getyAxisRowNames().length;c++) {
+						for(int g=0;g<gOrder.length;g++) {
 							if(r.nextFloat()<probMutation) {
-									newM.betas[c][gr] += r.nextGaussian()*fractChange;
+									newM.betas[g][gr] += r.nextGaussian()*fractChange;
 							}
 						}
 					}
@@ -848,11 +870,9 @@ public abstract class Abstract_FileSetting {
 					line.append(cur.scores[c][gr]).append("\t");
 				}
 				line.append(cur.identity[c]);
-				
+				out.writeString(line.toString(),true);
 			}
-			
 			out.writeString("Betas");
-			
 			for(int g=0;g<gOrder.length;g++) {
 				line.delete(0, line.capacity());
 				line.append(gOrder[g]).append("\t");
@@ -864,7 +884,6 @@ public abstract class Abstract_FileSetting {
 			line.delete(0, line.capacity());
 			line.append("End\t").append(m);
 			out.writeString(line.toString(),true);
-
 		}
 		public void setScoreThreshold(double scoreThreshold) {
 			this.scoreThreshold = scoreThreshold;
@@ -892,7 +911,19 @@ public abstract class Abstract_FileSetting {
 		}
 		public void setMinProgeney(int minProgeney) {
 			this.minProgeney = minProgeney;
-		}	
+		}
+		public void setOutFile(String outFile) {
+			this.outFile = outFile;
+		}
+		public void setGroupStart(String groupStart) {
+			this.groupStart=groupStart;
+		}
+		public void setScaledExpresion(String scaledExpresion) {
+			this.scaledExpresion = scaledExpresion;
+		}
+		public void setReps(int reps) {
+			this.reps = reps;
+		}		
 	}
 	public String getPcaLoadings() {
 		return pcaLoadings;
