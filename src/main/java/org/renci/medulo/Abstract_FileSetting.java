@@ -15,6 +15,7 @@ import java.util.SortedSet;
 import java.util.TreeSet;
 import java.util.stream.Collectors;
 
+import org.apache.commons.math3.distribution.NormalDistribution;
 import org.apache.commons.math3.linear.MatrixUtils;
 import org.apache.commons.math3.linear.RealMatrix;
 import org.apache.commons.math3.linear.RealVector;
@@ -553,10 +554,12 @@ public abstract class Abstract_FileSetting {
 	}
 
 	public class Evolution   implements Runnable{
-		public double scoreThreshold;
 		public double probMutation;
 		public double fractChange;
-		public boolean pareto =true;
+		public double fractionChangePriorProb;
+		public double probMutationPriorProb;
+		public double thresholdTruthPriorProb;
+		public boolean pareto =false;
 		public boolean sortAngel = false;
 		public double paretoAngle =5;
 		public double angle;
@@ -564,6 +567,8 @@ public abstract class Abstract_FileSetting {
 		public double wt1;
 		public String groupStart;
 		public String scaledExpresion;
+		public String rawExpresion;
+		public String cellUmiCounts;
 		public int minProgeney;
 		public String outFile;
 		public int genomes2Save;
@@ -572,6 +577,7 @@ public abstract class Abstract_FileSetting {
 		Map<String,Set<String>> g2gr = new LinkedHashMap<String,Set<String>>();
 		double[][] expGeneByCell;
 		public BigFrame exp;
+		public BigFrame cellDepth;
 		public EvolutionModel startModel = new EvolutionModel();
 		public List<EvolutionModel> newModels = new ArrayList<EvolutionModel>();
 		public List<EvolutionModel> models = new ArrayList<EvolutionModel>();
@@ -582,7 +588,9 @@ public abstract class Abstract_FileSetting {
 // 		public CompairEvolutionModel cmp;
 // 		public CompairEvolutionModelAngle cmpa;
  		public StringBuffer line = new StringBuffer();
- 		public boolean verbose1=false;
+ 		public boolean verbose1=true;
+ 		public boolean MakeBenFile = true;
+ 		public boolean firstTime = true;
  		public Evolution() {
 			super();
 		}
@@ -625,6 +633,52 @@ public abstract class Abstract_FileSetting {
 			write(new File(outFile));
 
 		}
+		public void run2(){
+			CHATBufferedFileReader in = new CHATBufferedFileReader(new File(groupStart));
+			String l;
+			Set<String> allGenes = new LinkedHashSet<String>();
+			ggIn= new LinkedHashMap<String, Set<String>>();
+			while((l=in.nextLine())!=null) {
+				String [] f = l.split("\t");
+				if(!ggIn.containsKey(f[1]))ggIn.put(f[1], new LinkedHashSet<String>());
+				ggIn.get(f[1]).add(f[0]);
+				allGenes.add(f[0]);
+			}
+			in.close();
+			exp = new BigFrame("rawExp",rawExpresion, "control_cell", "gene", "\t");
+			exp.load(false,allGenes);
+			cellDepth = new BigFrame("cellUmiCounts", cellUmiCounts, "depth", "cellNames", "\t");
+			cellDepth.load(false);
+
+			for(String gr:ggIn.keySet()) {
+				for(String g: ggIn.get(gr)) {
+					if(!g2gr.containsKey(g))g2gr.put(g, new LinkedHashSet<String>());
+					g2gr.get(g).add(gr);
+				}
+			}
+			gOrder = exp.yAxisRowNames2Index.keySet().toArray(new String[exp.yAxisRowNames2Index.size()]);
+			grOrder = ggIn.keySet().toArray(new String[ggIn.keySet().size()]);
+			cOrder =exp.getxAxisColNames2Index().keySet().toArray(new String[exp.getxAxisColNames2Index().keySet().size()]);
+			expGeneByCell = new double [gOrder.length][cOrder.length];
+			for(int g = 0;g<gOrder.length;g++) {
+				for(int c=0;c<cOrder.length;c++) {
+					expGeneByCell[g][c] = exp.data[exp.yAxisRowNames2Index.get(gOrder[g])][exp.getxAxisColNames2Index().get(cOrder[c])];
+				}
+			}
+			exp=null;
+			System.gc();
+			for(int g = 0;g<gOrder.length;g++) {
+				for(int c=0;c<cOrder.length;c++) {
+					expGeneByCell[g][c] = expGeneByCell[g][c] * 10000 / cellDepth.data[cellDepth.yAxisRowNames2Index.get(cOrder[c])][0];
+				}
+			}
+			makeInitalModel();
+			makeModels(100);
+			selectNextGen();
+			evolve(reps,minProgeney);
+			write(new File(outFile));
+
+		}
 		public void makeInitalModel() {
 			startModel.betas=new double[gOrder.length][grOrder.length]; 
 			for(int gr = 0;gr<grOrder.length;gr++) {
@@ -632,9 +686,11 @@ public abstract class Abstract_FileSetting {
 					startModel.betas[g][gr] =g2gr.get(gOrder[g]).contains(grOrder[gr])?1d:-1d;
 				}
 			}
+			startModel.priorProbGroup = new double [grOrder.length +1];
+			Arrays.fill(startModel.priorProbGroup, 1d/(double)startModel.priorProbGroup.length);
 			normalizeBetas(startModel);
 			calcModel(startModel);
-			if(verbose1)System.out.println( "metrix scores for initial model:\t" +  startModel.metrix[0].toString() + "\t" + startModel.metrix[1].toString());
+			if(verbose1)System.out.println( "metrix scores for initial model:\t" +  startModel.metrix[0].toString() + "\t" + startModel.metrix[1].toString()+ "\t" + startModel.metrix[2].toString());
 			models.add(startModel);
 		}
 		private void normalizeBetas(EvolutionModel curModel) {
@@ -651,8 +707,9 @@ public abstract class Abstract_FileSetting {
 			}
 		}
 		private void calcModel(EvolutionModel curModel) {
-			curModel.scores = new double[cOrder.length][grOrder.length]; 
+			curModel.scores = new double[cOrder.length][grOrder.length +1]; 
 			curModel.identity = new String [cOrder.length];
+			curModel.idScore = new double [cOrder.length];
 			for(int gr = 0;gr<grOrder.length;gr++) {
 				for(int c =0;c<cOrder.length;c++ ) {
 					double curScore = 0;
@@ -667,44 +724,110 @@ public abstract class Abstract_FileSetting {
 				}
 			}
 			//normalize by group
-			double cMax;
-			Double [] metrix = {0d,0d};
-			for(int m=0;m<grOrder.length;m++) {
-				cMax = Double.NEGATIVE_INFINITY;
-				for( int c = 0;c<curModel.scores.length;c++) {
-					cMax=Double.max(cMax, curModel.scores[c][m]);
+			NormalDistribution nd = new NormalDistribution();
+			for (int gr = 0; gr < grOrder.length; gr++) {
+				List <Double> grValues = new ArrayList<Double>();
+				for (int c = 0; c < curModel.scores.length; c++) {
+					grValues.add(curModel.scores[c][gr]);// = (curModel.scores[c][gr]-mean[gr])/var[gr];
 				}
-				for( int c = 0;c<curModel.scores.length;c++) {
-					curModel.scores[c][m]= curModel.scores[c][m]/cMax;
+				Collections.sort(grValues, Collections.reverseOrder());  
+				int expectedSize = (int) ((double)grValues.size() * curModel.priorProbGroup[gr]);
+				//calculate mean
+				double mean = 0;
+				for (int c = 0; c < expectedSize; c++) {
+						mean +=grValues.get(c);
+				}
+				mean=mean/(double)expectedSize;
+				double var = 0;
+				for (int i = 0; i < expectedSize; i++) var += Math.pow((grValues.get(i)-mean),2);
+				var = Math.sqrt(var/(double)(expectedSize-1));
+				for(int c = 0 ; c<cOrder.length; c++) {
+					curModel.scores[c][gr]=nd.cumulativeProbability((curModel.scores[c][gr]-mean)/var);
 				}
 			}
-			int intGr = -9;
-			double cellTotal;
-			for( int c = 0;c<curModel.scores.length;c++) {
-				cMax=Double.NEGATIVE_INFINITY;
-				cellTotal=0;
-				for(int gr = 0;gr<grOrder.length;gr++) {
-					cellTotal+= curModel.scores[c][gr];
-					if(curModel.scores[c][gr]>cMax) {
-						intGr = gr;
-						cMax = curModel.scores[c][gr];
+			List <Double> grValues = new ArrayList<Double>();
+			for(int c=0; c<curModel.scores.length;c++) {
+				curModel.scores[c][grOrder.length]=1;
+				for (int gr = 0; gr < grOrder.length; gr++) {
+					curModel.scores[c][grOrder.length]-=curModel.scores[c][gr];
+				}
+				grValues.add(curModel.scores[c][grOrder.length]);
+			}
+			Collections.sort(grValues, Collections.reverseOrder());  
+			int expectedSize = (int) ((double)grValues.size() * curModel.priorProbGroup[grOrder.length]);
+			//calculate mean
+			double mean = 0;
+			for (int c = 0; c < expectedSize; c++) {
+				mean +=grValues.get(c);
+			}
+			mean=mean/(double)expectedSize;
+			double var = 0;
+			for (int i = 0; i < expectedSize; i++) var += Math.pow((grValues.get(i)-mean),2);
+			var = Math.sqrt(var/(double)(expectedSize-1));
+			for(int c = 0 ; c<cOrder.length; c++) {
+				curModel.scores[c][grOrder.length]=nd.cumulativeProbability((curModel.scores[c][grOrder.length]-mean)/var);
+			}
+			int cellId=-9;
+			double maxCellScore;
+			for(int c = 0 ; c<cOrder.length; c++) {
+				maxCellScore=Double.NEGATIVE_INFINITY;
+				for(int gr=0;gr<=grOrder.length;gr++) {
+					if(curModel.scores[c][gr]>maxCellScore) {
+						maxCellScore = curModel.scores[c][gr];
+						cellId = gr;
 					}
 				}
-				if(cMax>scoreThreshold) {
-					curModel.identity[c]=grOrder[intGr];
-					cellTotal-= cMax;
-					metrix[0] +=cMax;
-					metrix[1] -= cellTotal;
-				}else {
+				if(cellId==grOrder.length) {
 					curModel.identity[c]="null";
-					metrix[0] += 1-cMax;
-					metrix[1] -=cellTotal;
+				}else {
+					curModel.identity[c]=grOrder[cellId];
 				}
+				Double x2 = curModel.scores[c][cellId];
+				for(int gr2=0;gr2<grOrder.length+1;gr2++) {
+					if(cellId!=gr2)
+					x2 *= (1d-curModel.scores[c][gr2]);
+				}
+				curModel.idScore[c] = x2;
 			}
-			curModel.metrix= metrix;
-			curModel.euclidAndAngle = new Double[2];
-			curModel.euclidAndAngle[0]=Math.sqrt(Math.pow(metrix[0],2)+Math.pow(metrix[1], 2));
-			curModel.euclidAndAngle[1]=Math.atan(metrix[0]/metrix[1])/Math.PI*180d;
+			if(MakeBenFile && firstTime) {
+				CHATBufferedFileWriter out = new CHATBufferedFileWriter();
+				out.open("ForBen.tsv");
+				line.delete(0, line.capacity());
+				for(int gr=0;gr<grOrder.length;gr++)line.append(grOrder[gr]).append("\t");
+				line.append("null");
+				out.writeString(line.toString());
+				for(int c=0;c<cOrder.length;c++) {
+					line.delete(0, line.capacity());
+					line.append(cOrder[c]);
+					for(int gr=0;gr<grOrder.length+1;gr++) {
+						line.append("\t").append(curModel.scores[c][gr]);
+					}
+					line.append("\t").append(curModel.identity[c]).append("\t").append(curModel.idScore[c]).append("\t").append(cellDepth.data[cellDepth.yAxisRowNames2Index.get(cOrder[c])][0]);
+					out.writeString(line.toString());
+				}
+				out.close();
+				firstTime=false;
+			}
+			//classify cell;
+			//evaluate cur Model
+			Double [] metrix = {0d,0d,0d};
+//			Double [] angle = {0d,0d,0d};
+			
+			for(int c=0;c<cOrder.length;c++) {
+				double x = 0d;
+				for(int gr=0;gr<grOrder.length+1;gr++) {
+					double x2 = curModel.scores[c][gr];
+					for(int gr2=0;gr2<grOrder.length+1;gr2++) {
+						if(gr!=gr2)
+						x2 *= (1d-curModel.scores[c][gr]);
+					}
+					x+=x2;
+				}
+				metrix[1] += Math.log(x);
+				metrix[2] += curModel.idScore[c];
+			}
+			metrix[0] = -metrix[2]/metrix[1];
+			curModel.metrix=metrix;
 		}
 		public void makeModels(int x) {
 			logger.info("Making new " + x + " for each existing saved model");
@@ -715,6 +838,10 @@ public abstract class Abstract_FileSetting {
 					ct++;
 					EvolutionModel newM = new EvolutionModel();
 					newM.betas = cur.betas.clone();
+					newM.priorProbGroup = cur.priorProbGroup.clone();
+					if(r.nextFloat()<probMutationPriorProb) {
+						newM.priorProbGroup = mutatePriorProb(newM.priorProbGroup, cur);
+					}
 					for(int gr=0;gr<grOrder.length;gr++) {
 						for(int g=0;g<gOrder.length;g++) {
 							if(r.nextFloat()<probMutation) {
@@ -725,32 +852,72 @@ public abstract class Abstract_FileSetting {
 					normalizeBetas(newM);
 					calcModel(newM);
 					newModels.add(newM);
-					if(verbose1)System.out.println( "metrix scores for new model:\t" + ct + "\t" + newM.metrix[0].toString() + "\t" + newM.metrix[1].toString());
+					if(verbose1)System.out.println( "metrix scores for new model:\t" + ct + "\t" + newM.metrix[0].toString() + "\t" + newM.metrix[1].toString()+ "\t" + newM.metrix[2].toString());
 					if(ct%100==0)logger.info(ct + " new models made");
 				}
 			}
 			logger.info("Finish making new models");
 		}
+		private double[] mutatePriorProb(double[] curPriorProbGroup, EvolutionModel cur) {
+			double [] curPriorDist = curPriorProbGroup.clone();
+			double [] curDist = new double [grOrder.length+1];
+			double [] out = new double [grOrder.length+1];
+			Map<String,Integer> cts = new LinkedHashMap<String,Integer>();
+			for(int c=0;c<cOrder.length;c++) {
+				if(cur.idScore[c]>thresholdTruthPriorProb) {
+					if(cts.containsKey(cur.identity[c])) {
+						cts.put(cur.identity[c], cts.get(cur.identity[c])+1);
+					}else {
+						cts.put(cur.identity[c], 1);
+					}
+				}
+			}
+			int t=0;
+			for(int gr=0;gr<grOrder.length;gr++) {
+				if(cts.containsKey(grOrder[gr])) {
+					curDist[gr]= cts.get(grOrder[gr]);
+					t += cts.get(grOrder[gr]);
+				}else {
+					curDist[gr]=0;
+				}
+			}
+			
+			if(cts.containsKey("null")) {
+				curDist[curDist.length-1]= cts.get("null");
+				t += cts.get("null");
+			}else {
+				curDist[curDist.length-1]=0;
+			}
+			for(int gr = 0;gr<curDist.length;gr++)curDist[gr]= curDist[gr]/(double) t;
+			for(int gr = 0;gr<curDist.length;gr++) out[gr]= curPriorDist[gr] - ((curPriorDist[gr]-curDist[gr])*fractionChangePriorProb) ;
+			//normalize
+			double s = 0;
+			for(int gr = 0;gr<curDist.length;gr++)s +=out[gr];
+			for(int gr = 0;gr<curDist.length;gr++)out[gr]= out[gr]/s;
+			return out;
+		}
 		public class EvolutionModel implements Comparable<EvolutionModel>{
 			double[][] betas;
 			double scores[][];
 			String [] identity;
+			double [] idScore;
 			Double [] metrix;
-			Double [] euclidAndAngle;
+//			Double [] euclidAndAngle;
+			double [] priorProbGroup;
 			@Override
 			public int compareTo(EvolutionModel o) {
-				if(!sortAngel) {
+				//if(!sortAngel) {
 					Double temp1 =(this.metrix[0]*wt0 + this.metrix[1]*wt1);
 					Double temp2 =(o.metrix[0]*wt0 + o.metrix[1]*wt1);
 					return -temp1.compareTo(temp2);
-				}else {
+			/*	}else {
 					int x = this.euclidAndAngle[1].compareTo(o.euclidAndAngle[1]);
 					if(x==0) {	
 						return this.euclidAndAngle[0].compareTo(o.euclidAndAngle[0]);
 					}else {
 						return x;
 					}
-				}
+				}*/
 			}
 		}
 		public void calcNewModels() {
@@ -792,11 +959,11 @@ public abstract class Abstract_FileSetting {
 				newModels.clear();
 				logger.info(models.size() + " models saved");
 				logger.info("metrix scores for initial model\t" + startModel.metrix[0].toString() + "\t"
-						+ startModel.metrix[1].toString());
+						+ startModel.metrix[1].toString() + "\t" + startModel.metrix[2].toString());
 				logger.info("metrix scores for best model:\t" + models.get(0).metrix[0].toString() + "\t"
-						+ models.get(0).metrix[1].toString());
+						+ models.get(0).metrix[1].toString() + "\t" + models.get(0).metrix[2].toString());
 			}else {
-				sortAngel=true;
+			/*	sortAngel=true;
 				models.addAll(newModels);
 				newModels.clear();
 				Collections.sort(models);
@@ -833,9 +1000,9 @@ public abstract class Abstract_FileSetting {
 				newModels.clear();
 				logger.info(models.size() + " models saved");
 				logger.info("metrix scores for initial model based on metrix\t" + startModel.metrix[0].toString() + "\t"
-						+ startModel.metrix[1].toString());
+						+ startModel.metrix[1].toString() + "\t" + startModel.metrix[2].toString());
 				logger.info("metrix scores for best model:\t" + models.get(0).metrix[0].toString() + "\t"
-						+ models.get(0).metrix[1].toString());
+						+ models.get(0).metrix[1].toString() + "\t" +models.get(0).metrix[2].toString());*/
 			}
 		}
 		public void write(File file) {
@@ -858,24 +1025,24 @@ public abstract class Abstract_FileSetting {
 			line.append("Start\t").append(m);
 			out.writeString(line.toString(),true);
 			line.delete(0, line.capacity());
-			line.append(cur.metrix[0]).append("\t").append(cur.metrix[1]);
+			line.append(m).append("\t").append("modelScores").append("\t").append(cur.metrix[0]).append("\t").append(cur.metrix[1]).append("\t").append(cur.metrix[2]);
 			out.writeString(line.toString(),true);
-			line.delete(0, line.capacity());
+/*			line.delete(0, line.capacity());
 			line.append(cur.euclidAndAngle[0]).append("\t").append(cur.euclidAndAngle[1]);
-			out.writeString(line.toString(),true);
+			out.writeString(line.toString(),true);*/
 			for(int c=0;c<cOrder.length;c++) {
 				line.delete(0, line.capacity());
-				line.append(cOrder[c]).append("\t");
+				line.append(m).append("\t").append("scores").append("\t").append(cOrder[c]);
 				for(int gr=0;gr<grOrder.length;gr++) {
-					line.append(cur.scores[c][gr]).append("\t");
+					line.append("\t").append(cur.scores[c][gr]).append("\t");
 				}
-				line.append(cur.identity[c]);
+				line.append("\t").append(cur.identity[c]).append("\t").append(cur.idScore[c]).append("\t").append(cellDepth.data[cellDepth.yAxisRowNames2Index.get(cOrder[c])][0]);
 				out.writeString(line.toString(),true);
 			}
 			out.writeString("Betas");
 			for(int g=0;g<gOrder.length;g++) {
 				line.delete(0, line.capacity());
-				line.append(gOrder[g]).append("\t");
+				line.append(m).append("\t").append("betas").append("\t").append(gOrder[g]).append("\t");
 				for(int gr=0;gr<grOrder.length;gr++) {
 					line.append(cur.betas[g][gr]).append("\t");
 				}
@@ -884,9 +1051,6 @@ public abstract class Abstract_FileSetting {
 			line.delete(0, line.capacity());
 			line.append("End\t").append(m);
 			out.writeString(line.toString(),true);
-		}
-		public void setScoreThreshold(double scoreThreshold) {
-			this.scoreThreshold = scoreThreshold;
 		}
 		public void setFractioChange(double d) {
 			this.fractChange=d;
@@ -923,6 +1087,21 @@ public abstract class Abstract_FileSetting {
 		}
 		public void setReps(int reps) {
 			this.reps = reps;
+		}
+		public void setRawExpresion(String rawExpresion) {
+			this.rawExpresion = rawExpresion;
+		}
+		public void setCellUmiCounts(String cellUmiCounts) {
+			this.cellUmiCounts = cellUmiCounts;
+		}
+		public void setFractionChangePriorProb(double fractionChangePriorProb) {
+			this.fractionChangePriorProb = fractionChangePriorProb;
+		}
+		public void setProbMutationPriorProb(double probMutationPriorProb) {
+			this.probMutationPriorProb = probMutationPriorProb;
+		}
+		public void setThresholdTruthPriorProb(double thresholdTruthPriorProb) {
+			this.thresholdTruthPriorProb = thresholdTruthPriorProb;
 		}		
 	}
 	public String getPcaLoadings() {
